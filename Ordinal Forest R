@@ -1,0 +1,63 @@
+# install.packages("randomForest")
+# install.packages("ordinalForest")
+# setwd("D:\\QCZ\\ordinal_regression\\0123res")
+library(randomForest)
+library(ordinalForest)
+
+
+# datatrain <- read.csv("train_best.csv", fileEncoding = "UTF-8")
+# datatrain$fe_tag <- factor(datatrain$fe_tag)
+# datatest  <- read.csv("test_best.csv", fileEncoding = "UTF-8")
+# datatest$fe_tag <- factor(datatest$fe_tag)
+
+set seed(12)
+data<-read.csv("fenshu20240116.csv",fileEncoding = "utf-8")
+split_ratio <- 0.8
+n_samples <- nrow(data)
+
+#生成随机索引
+train_idx <- sample(1:n_samples,size = floor(split_ratio * n_samples))
+
+#拆分数据集
+datatrain <- data[train_idx,]
+datatest <- data[-train_idx,]
+
+#查看拆分结果
+cat("训练集样本数："，nrow(datatrain),"\n")
+cat("测试样本数："，nrow(datatest))
+
+# Construct OF prediction rule using the training dataset (default
+# perffunction = "probability" corresponding to the
+# (negative) ranked probability score as performance function):
+ordforres1 <- ordfor(depvar="fe_tag", data=datatrain, nsets=1000, ntreeperdiv=100,
+                    ntreefinal=50000, perffunction = "probability")
+
+print(ordforres1)
+# Predict values of the ordinal target variable in the test dataset:
+preds1 <- predict(ordforres1, newdata=datatest)
+
+same_index1 <- which(datatest$fe_tag == preds1$ypred)
+num_same1 <- length(same_index1)
+print(num_same1/nrow(datatest))
+
+# install.packages("caret")
+library(caret)
+# 计算混淆矩阵
+test_labels<-datatest$fe_tag
+predicted_labels <- preds1$ypred
+conf_matrix <- confusionMatrix(predicted_labels, test_labels)
+
+# 提取性能指标
+accuracy <- conf_matrix$overall['Accuracy']
+precision <- conf_matrix$byClass[,'Pos Pred Value']
+recall <- conf_matrix$byClass[,'Sensitivity']
+f1_score <- conf_matrix$byClass[,'F1']
+
+# 打印结果
+cat("Accuracy:", accuracy, "\n")
+cat("Precision:", precision, "\n")
+cat("Recall:", recall, "\n")
+cat("F1 Score:", f1_score, "\n")
+# 打印宏平均
+# cat("Macro Precision:", mean(precision, na.rm=T))
+# cat("Macro Recall:", mean(recall, na.rm=T))
