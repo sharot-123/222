@@ -448,58 +448,110 @@ from sklearn.metrics import accuracy_score
 
 ##汇总调参之后
 
-##调参后
-clf=XGBC(
-#     通用参数
-    silent=0 ,#设置成1则没有运行信息输出，最好是设置为0.是否在运行升级时打印消息。
-    nthread=4,# cpu 线程数 默认最大
-    learning_rate= 0.1, # 如同学习率
-    min_child_weight=2,
-    # 这个参数默认是 1，是每个叶子里面 h 的和至少是多少，对正负样本不均衡时的 0-1 分类而言，假设 h 在 0.01 附近，min_child_weight 为 1 意味着叶子节点中最少需要包含 100 个样本。
-    #这个参数非常影响结果，控制叶子节点中二阶导的和的最小值，该参数值越小，越容易 overfitting。
-    max_depth=4, # 构建树的深度，越大越容易过拟合
-    gamma=0.4,  # 树的叶子节点上作进一步分区所需的最小损失减少,越大越保守，一般0.1、0.2这样子。
-    subsample=0.6, # 随机采样训练样本 训练实例的子采样比
-    colsample_bytree=0.7, # 生成树时进行的列采样
-    reg_lambda=1,  # 控制模型复杂度的权重值的L2正则化项参数，参数越大，模型越不容易过拟合。
-    reg_alpha=0.001, # L1 正则项参数
-    scale_pos_weight=1, #如果取值大于0的话，在类别样本不平衡的情况下有助于快速收敛。平衡正负权重
-    objective= 'multi:softmax', #多分类的问题 指定学习任务和相应的学习目标
-    num_class=3, # 类别数，多分类与 multisoftmax 并用
-    n_estimators=20, #树的个数
-    seed=1000#随机种子
-).fit(x_train, y_train)
+# #加入order_logic的xgboost代码
+import pandas as pd
+import numpy as np
+from xgboost import XGBClassifier
+from sklearn.metrics import precision_score, recall_score, f1_score, accuracy_score
 
+# X_train = pd.read_csv('X_train_best.csv')
+# y_train = pd.read_csv('y_train_best.csv').values.ravel()
+# X_test = pd.read_csv('X_test_best.csv')
+# y_test = pd.read_csv('y_test_best.csv').values.ravel()
 
+# 自定义有序损失函数
+def ordered_logistic_loss(y_true, y_pred):
+    """
+    自定义有序逻辑回归损失函数
+    """
+    y_true = y_true.astype(int)
+    num_classes = 3  # 明确类别数
+    num_samples = len(y_true)
 
-from sklearn.metrics import precision_score, recall_score, f1_score, roc_auc_score, accuracy_score
-evaluates = ['accuracy','precision','recall','f1']
-y_train_pred = clf.predict(x_train)
-y_test_pred = clf.predict(x_test)
-# accuracy
-train_accuracy = clf.score(x_train, y_train)
-test_accuracy = clf.score(x_test, y_test)
-# precision
-train_precision_macro = precision_score(y_train, y_train_pred,average="macro")
-test_precision_macro = precision_score(y_test, y_test_pred,average="macro")
-train_precision_micro = precision_score(y_train, y_train_pred,average="micro")
-test_precision_micro = precision_score(y_test, y_test_pred,average="micro")
-# recall
-train_recall_macro = recall_score(y_train, y_train_pred,average="macro")
-test_recall_macro = recall_score(y_test, y_test_pred,average="macro")
-train_recall_micro = recall_score(y_train, y_train_pred,average="micro")
-test_recall_micro = recall_score(y_test, y_test_pred,average="micro")
-# f1
-train_f1_macro = f1_score(y_train, y_train_pred,average="macro")
-test_f1_macro = f1_score(y_test, y_test_pred,average="macro")
-train_f1_micro = f1_score(y_train, y_train_pred,average="micro")
-test_f1_micro = f1_score(y_test, y_test_pred,average="micro")
+    # 确保 y_pred 是一维数组
+    if y_pred.ndim == 2:
+        # 这里假设取第一个类别的预测分数作为示例，你可以根据实际情况调整
+        y_pred = y_pred[:, 0]
 
-print("训练集macro:accuracy is %f,precision is %f,recall is %f,f1 is %f"%(train_accuracy,train_precision_macro,train_recall_macro,train_f1_macro))
-print("测试集macro:accuracy is %f,precision is %f,recall is %f,f1 is %f"%(test_accuracy,test_precision_macro,test_recall_macro,test_f1_macro))
-print("训练集micro:accuracy is %f,precision is %f,recall is %f,f1 is %f"%(train_accuracy,train_precision_micro,train_recall_micro,train_f1_micro))   
-print("测试集micro:accuracy is %f,precision is %f,recall is %f,f1 is %f"%(test_accuracy,test_precision_micro,test_recall_micro,test_f1_micro))
+    # 初始化概率矩阵
+    probas = np.zeros((num_samples, num_classes))
 
+    # 计算每个类别的概率
+    probas[:, 0] = 1 / (1 + np.exp(-y_pred))
+    probas[:, 2] = 1 - 1 / (1 + np.exp(-y_pred))
+    probas[:, 1] = probas[:, 0] - (1 / (1 + np.exp(-(y_pred + 1))))
+
+    # 确保概率值在合理范围内
+    probas = np.clip(probas, 1e-15, 1 - 1e-15)
+
+    # 计算对数概率
+    log_probas = np.log(probas)
+
+    # 计算损失
+    loss = -np.mean(log_probas[np.arange(num_samples), y_true])
+
+    # 计算梯度和海森矩阵
+    grad = np.zeros((num_samples, num_classes))
+    hess = np.zeros((num_samples, num_classes))
+    for i in range(num_samples):
+        for j in range(num_classes):
+            if j == y_true[i]:
+                grad[i, j] = probas[i, j] - 1
+            else:
+                grad[i, j] = probas[i, j]
+            hess[i, j] = probas[i, j] * (1 - probas[i, j])
+    grad = grad.ravel()
+    hess = hess.ravel()
+    return grad, hess
+#
+# #初始化 XGBClassifier 模型
+clf = XGBClassifier(
+# #     通用参数
+  #silent = 0,  # 设置成1则没有运行信息输出，最好是设置为0.是否在运行升级时打印消息。
+  nthread = 4,  # cpu 线程数 默认最大
+  learning_rate = 0.1,  # 如同学习率
+  min_child_weight = 2,
+# 这个参数默认是 1，是每个叶子里面 h 的和至少是多少，对正负样本不均衡时的 0-1 分类而言，假设 h 在 0.01 附近，min_child_weight 为 1 意味着叶子节点中最少需要包含 100 个样本。
+# 这个参数非常影响结果，控制叶子节点中二阶导的和的最小值，该参数值越小，越容易 overfitting。
+  max_depth = 4,  # 构建树的深度，越大越容易过拟合
+  gamma = 0.4,  # 树的叶子节点上作进一步分区所需的最小损失减少,越大越保守，一般0.1、0.2这样子。
+  subsample = 0.6,  # 随机采样训练样本 训练实例的子采样比
+  colsample_bytree = 0.7,  # 生成树时进行的列采样
+  reg_lambda = 1,  # 控制模型复杂度的权重值的L2正则化项参数，参数越大，模型越不容易过拟合。
+  reg_alpha = 0.001,  # L1 正则项参数
+  #scale_pos_weight = 2,  # 如果取值大于0的话，在类别样本不平衡的情况下有助于快速收敛。平衡正负权重
+  objective = 'ordered_logistic_loss',  # 多分类的问题 指定学习任务和相应的学习目标
+  num_class = 3,  # 类别数，多分类与 multisoftmax 并用
+  n_estimators = 20,  # 树的个数
+  seed = 1000  # 随机种子
+)
+
+# 进行预测
+y_train_pred = clf.predict(X_train)
+y_test_pred = clf.predict(X_test)
+
+# 计算准确率
+train_accuracy = clf.score(X_train, y_train)
+test_accuracy = clf.score(X_test, y_test)
+
+# 定义评估指标和平均方法
+evaluates = ['macro', 'micro']
+metrics = {
+    'precision': precision_score,
+    'recall': recall_score,
+    'f1': f1_score
+}
+
+# 循环计算并打印评估指标
+for avg_type in evaluates:
+    # train_metrics = {}
+    test_metrics = {}
+    for metric_name, metric_func in metrics.items():
+        # train_metrics[metric_name] = metric_func(y_train, y_train_pred, average=avg_type)
+        test_metrics[metric_name] = metric_func(y_test, y_test_pred, average=avg_type)
+
+    # print(f"训练集{avg_type}: accuracy is {train_accuracy:.6f}, precision is {train_metrics['precision']:.6f}, recall is {train_metrics['recall']:.6f}, f1 is {train_metrics['f1']:.6f}")
+    print(f"测试集{avg_type}: accuracy is {test_accuracy:.6f}, precision is {test_metrics['precision']:.6f}, recall is {test_metrics['recall']:.6f}, f1 is {test_metrics['f1']:.6f}")
 
 # from xgboost import plot_importance
 # plot_importance(clf)
